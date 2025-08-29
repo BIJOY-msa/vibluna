@@ -1,19 +1,34 @@
-name: deploy-frontend-storage
+name: Deploy frontend to Azure Storage Static Website
+
 on:
-  workflow_dispatch: {}
-permissions: { id-token: write, contents: read }
+  push:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-frontend-storage.yml'
+  workflow_dispatch:
+
 jobs:
-  upload-static-website:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
-        with: { creds: ${{ secrets.AZURE_CREDENTIALS }} }
-      - name: Enable Static Website
-        run: |
-          az storage blob service-properties update             --account-name "${{ secrets.STORAGE_ACCOUNT }}"             --static-website --index-document index.html
-      - name: Upload frontend files to $web
-        run: |
-          az storage blob upload-batch             -s frontend             -d '$web'             --account-name "${{ secrets.STORAGE_ACCOUNT }}"             --auth-mode key             --account-key "${{ secrets.STORAGE_KEY }}"
-      - name: Show website endpoint
-        run: az storage account show -n "${{ secrets.STORAGE_ACCOUNT }}" --query "primaryEndpoints.web" -o tsv
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Uses Azure CLI without needing azure/login because we pass account key
+      - name: Enable static website & upload index.html
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az storage blob service-properties update \
+              --account-name "${{ secrets.STORAGE_ACCOUNT }}" \
+              --account-key "${{ secrets.STORAGE_KEY }}" \
+              --static-website --index-document index.html
+
+            az storage blob upload \
+              --account-name "${{ secrets.STORAGE_ACCOUNT }}" \
+              --account-key "${{ secrets.STORAGE_KEY }}" \
+              --container-name '$web' \
+              --name index.html \
+              --file frontend/index.html \
+              --overwrite
