@@ -1,54 +1,50 @@
-name: deploy-backend-aca
+name: Deploy backend to Azure Container Apps
+
 on:
-  workflow_dispatch: {}
-permissions: { id-token: write, contents: read }
+  push:
+    branches: [ "main" ]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend-aca.yml"
+  workflow_dispatch:
+
 env:
-  RESOURCE_GROUP: rg-vibluna
-  LOCATION: uksouth
-  ACR_NAME: viblunaacr
-  CONTAINERAPPS_ENV: env-vibluna
-  CONTAINERAPP_NAME: vibluna-api
-  IMAGE_NAME: vibluna-api
-  ACR_LOGIN_SERVER: ${{ env.ACR_NAME }}.azurecr.io
-  IMAGE_TAG: ${{ github.sha }}
+  RG: rg-vibluna
+  ACA_ENV: env-vibluna
+  ACA_APP: vibluna-api
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}   # e.g. vibluna.azurecr.io
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
-        with: { creds: ${{ secrets.AZURE_CREDENTIALS }} }
-      - name: Azure CLI setup
-        run: |
-          az extension add -n containerapp --upgrade
-          az provider register --namespace Microsoft.App --wait
-          az provider register --namespace Microsoft.OperationalInsights --wait
-      - name: Ensure RG/ACR
-        run: |
-          az group create -n "$RESOURCE_GROUP" -l "$LOCATION"
-          az acr show -n "$ACR_NAME" -g "$RESOURCE_GROUP" || az acr create -n "$ACR_NAME" -g "$RESOURCE_GROUP" --sku Basic
-      - name: Build image in ACR
-        working-directory: backend
-        run: az acr build -r "$ACR_NAME" -t "$IMAGE_NAME:$IMAGE_TAG" .
-      - name: Ensure CA env
-        run: az containerapp env show -n "$CONTAINERAPPS_ENV" -g "$RESOURCE_GROUP" || az containerapp env create -n "$CONTAINERAPPS_ENV" -g "$RESOURCE_GROUP" -l "$LOCATION"
-      - name: Get ACR creds
-        id: acr
-        run: |
-          echo "server=${{ env.ACR_LOGIN_SERVER }}" >> $GITHUB_OUTPUT
-          echo "username=$(az acr credential show -n "$ACR_NAME" --query username -o tsv)" >> $GITHUB_OUTPUT
-          echo "password=$(az acr credential show -n "$ACR_NAME" --query passwords[0].value -o tsv)" >> $GITHUB_OUTPUT
-      - name: Create/Update Container App
-        env:
-          CREATOR_INVITE_CODE: ${{ secrets.CREATOR_INVITE_CODE || 'restrict' }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY || 'supersecret' }}
-          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS || '*' }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          STORAGE_BACKEND: ${{ secrets.STORAGE_BACKEND }}
-          AZURE_STORAGE_CONN_STRING: ${{ secrets.AZURE_STORAGE_CONN_STRING }}
-          AZURE_STORAGE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER || 'media' }}
-        run: |
-          az containerapp create -n "$CONTAINERAPP_NAME" -g "$RESOURCE_GROUP"             --environment "$CONTAINERAPPS_ENV"             --image "${{ env.ACR_LOGIN_SERVER}}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"             --ingress external --target-port 8000             --registry-server "${{ steps.acr.outputs.server }}"             --registry-username "${{ steps.acr.outputs.username }}"             --registry-password "${{ steps.acr.outputs.password }}"             --min-replicas 1 --max-replicas 3             --env-vars               SECRET_KEY="$SECRET_KEY"               CREATOR_INVITE_CODE="$CREATOR_INVITE_CODE"               CACHE_TTL="60"               CORS_ORIGINS="$CORS_ORIGINS"               DATABASE_URL="$DATABASE_URL"               STORAGE_BACKEND="$STORAGE_BACKEND"               AZURE_STORAGE_CONN_STRING="$AZURE_STORAGE_CONN_STRING"               AZURE_STORAGE_CONTAINER="$AZURE_STORAGE_CONTAINER" || true
-          az containerapp update -n "$CONTAINERAPP_NAME" -g "$RESOURCE_GROUP"             --image "${{ env.ACR_LOGIN_SERVER}}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"             --set-env-vars               SECRET_KEY="$SECRET_KEY"               CREATOR_INVITE_CODE="$CREATOR_INVITE_CODE"               CACHE_TTL="60"               CORS_ORIGINS="$CORS_ORIGINS"               DATABASE_URL="$DATABASE_URL"               STORAGE_BACKEND="$STORAGE_BACKEND"               AZURE_STORAGE_CONN_STRING="$AZURE_STORAGE_CONN_STRING"               AZURE_STORAGE_CONTAINER="$AZURE_STORAGE_CONTAINER"
-      - name: Show FQDN
-        run: az containerapp show -n "$CONTAINERAPP_NAME" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Deploy to Container Apps (build + push + deploy)
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          resourceGroup: ${{ env.RG }}
+          containerAppName: ${{ env.ACA_APP }}
+          environment: ${{ env.ACA_ENV }}
+          dockerfilePath: backend/Dockerfile
+          buildContext: ./backend
+          imageToBuild: ${{ env.ACR_LOGIN_SERVER }}/vibluna-api:${{ github.sha }}
+          registryUrl: ${{ env.ACR_LOGIN_SERVER }}
+          registryUsername: ${{ secrets.ACR_USERNAME }}
+          registryPassword: ${{ secrets.ACR_PASSWORD }}
+          ingress: external
+          targetPort: 8000
+          envVars: |
+            SECRET_KEY=supersecret
+            CREATOR_INVITE_CODE=restrict
+            CORS_ORIGINS=*
