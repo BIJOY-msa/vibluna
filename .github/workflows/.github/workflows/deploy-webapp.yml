@@ -1,0 +1,40 @@
+name: Build & deploy Web App container
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-webapp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # needed to push to GHCR
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry (GHCR)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build & push image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: backend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/vibluna-api:latest
+
+      - name: Deploy to Azure Web App (container)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: vibluna          # e.g., vibluna
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          images: ghcr.io/${{ github.repository_owner }}/vibluna-api:latest
